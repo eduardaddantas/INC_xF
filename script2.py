@@ -1,26 +1,34 @@
+# app.py
 import streamlit as st
 import psycopg2
 from datetime import datetime
 from calendar import monthrange
 import threading
-import time
+from monitor import monitor_servicenow_incidents  # Mantém a função do teu monitor
 
 # ==============================
-# Configuração inicial
+# Configurações iniciais
 # ==============================
 st.set_page_config(page_title="Incident Distribution", layout="wide")
 
-# ===== Conexão com PostgreSQL =====
+# ==============================
+# Conexão com PostgreSQL (Supabase)
+# ==============================
+pg = st.secrets["postgres"]
+
 conn = psycopg2.connect(
-    host="localhost",
-    port="5432",
-    database="incidentes_db",
-    user="admin",
-    password="admin"
+    host=pg["host"],
+    port=pg["port"],
+    dbname=pg["dbname"],
+    user=pg["user"],
+    password=pg["password"],
+    sslmode=pg.get("sslmode", "require")
 )
 cursor = conn.cursor()
 
-# ===== Dados =====
+# ==============================
+# Dados fixos
+# ==============================
 pessoas = ["Gustavo", "Manuel", "Agustin", "Yago", "Laura", "Mario", "Denis",
            "Maria C", "Eleonora", "Sandra", "Lucas", "Catia",
            "Andrea", "Lucie", "Leopoldo", "Imad", "Jeirdel"]
@@ -29,13 +37,44 @@ MAX_INCIDENTES = 60
 meses_es = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
             "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"]
 
+dias_semana_es = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"]
+
 # ==============================
 # Funções auxiliares
 # ==============================
+
 def generar_dias_mes(ano, mes):
     num_dias = monthrange(ano, mes)[1]
     return [datetime(ano, mes, d).strftime("%Y-%m-%d") for d in range(1, num_dias+1)]
 
+def hora_esta_no_turno(turno):
+    if turno.upper() == "DAY OFF":
+        return False
+    try:
+        h_inicio, h_fim = turno.split(" - ")
+        fmt = "%H:%M"
+        agora = datetime.now().time()
+        inicio = datetime.strptime(h_inicio, fmt).time()
+        fim = datetime.strptime(h_fim, fmt).time()
+        if inicio < fim:
+            return inicio <= agora <= fim
+        else:
+            return agora >= inicio or agora <= fim
+    except:
+        return False
+
+# ==============================
+# Monitor ServiceNow (Thread)
+# ==============================
+def iniciar_monitor():
+    t = threading.Thread(target=monitor_servicenow_incidents, args=("https://fiatchrysler.service-now.com/", 60), daemon=True)
+    t.start()
+    st.success("Monitor ServiceNow iniciado em background.")
+
+# ==============================
+# Funções CRUD
+# ==============================
+@st.cache_data(ttl=30)
 def carregar_incidentes(fecha):
     cursor.execute("SELECT person, incident_number FROM incidentes WHERE fecha = %s", (fecha,))
     return cursor.fetchall()
@@ -68,12 +107,6 @@ def atualizar_shift(person, fecha, inicio, fim):
         cursor.execute("INSERT INTO shifts (person, fecha, shift) VALUES (%s, %s, %s)", (person, fecha, turno))
     conn.commit()
 
-# Simulação do monitor (thread dummy)
-def monitor_servicenow(url, intervalo):
-    while True:
-        print(f"[Monitor] Consultando {url} ...")
-        time.sleep(intervalo)
-
 # ==============================
 # Interface Web
 # ==============================
@@ -82,7 +115,7 @@ st.title("📊 Incident Distribution")
 tab1, tab2 = st.tabs(["📝 Incidentes", "⏰ Shifts"])
 
 # ------------------------------
-# Aba Incidentes
+# Tab Incidentes
 # ------------------------------
 with tab1:
     col1, col2, col3 = st.columns(3)
@@ -94,8 +127,7 @@ with tab1:
         dias = generar_dias_mes(ano, meses_es.index(mes)+1)
         fecha = st.selectbox("Día", dias, index=datetime.now().day-1)
 
-    st.subheader(f"📌 Incidentes en {fecha}")
-
+    st.subheader(f"📌 Incidentes em {fecha}")
     dados = carregar_incidentes(fecha)
     if dados:
         st.table(dados)
@@ -103,14 +135,9 @@ with tab1:
         st.info("Nenhum incidente registrado.")
 
     st.divider()
-
-    st.subheader("➕ Añadir incidente")
-    col1, col2 = st.columns(2)
-    with col1:
-        pessoa = st.selectbox("Persona", pessoas)
-    with col2:
-        numero_inc = st.text_input("Número do incidente")
-
+    st.subheader("➕ Adicionar incidente")
+    pessoa = st.selectbox("Persona", pessoas)
+    numero_inc = st.text_input("Número do incidente")
     if st.button("Guardar incidente"):
         if pessoa and numero_inc:
             inserir_incidente(pessoa, fecha, numero_inc)
@@ -120,7 +147,6 @@ with tab1:
             st.error("Preencha todos os campos.")
 
     st.divider()
-
     st.subheader("🗑️ Remover incidente")
     if dados:
         pessoa_del = st.selectbox("Persona (remover)", [d[0] for d in dados])
@@ -130,8 +156,12 @@ with tab1:
             st.success("Incidente removido.")
             st.experimental_rerun()
 
+    st.divider()
+    if st.button("▶️ Iniciar monitor ServiceNow"):
+        iniciar_monitor()
+
 # ------------------------------
-# Aba Shifts
+# Tab Shifts
 # ------------------------------
 with tab2:
     col1, col2, col3 = st.columns(3)
@@ -152,15 +182,10 @@ with tab2:
         st.info("Nenhum shift registrado.")
 
     st.divider()
-
     st.subheader("✏️ Alterar / adicionar shift")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        pessoa_s = st.selectbox("Persona", pessoas)
-    with col2:
-        inicio = st.text_input("Hora inicio (HH:MM)", "09:00")
-    with col3:
-        fim = st.text_input("Hora fim (HH:MM)", "17:00")
+    pessoa_s = st.selectbox("Persona", pessoas)
+    inicio = st.text_input("Hora inicio (HH:MM)", "09:00")
+    fim = st.text_input("Hora fim (HH:MM)", "17:00")
 
     if st.button("Guardar shift"):
         if pessoa_s and inicio and fim:
@@ -169,11 +194,3 @@ with tab2:
             st.experimental_rerun()
         else:
             st.error("Preencha todos os campos.")
-
-# ------------------------------
-# Monitor (thread dummy)
-# ------------------------------
-if st.sidebar.button("▶️ Iniciar monitor ServiceNow"):
-    t = threading.Thread(target=monitor_servicenow, args=("https://fiatchrysler.service-now.com/", 60), daemon=True)
-    t.start()
-    st.sidebar.success("Monitor iniciado em background (ver logs do servidor).")
