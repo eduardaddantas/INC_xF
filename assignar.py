@@ -1,28 +1,31 @@
+# assignar.py
 import psycopg2
 from datetime import datetime
-from datetime import datetime, time
+import streamlit as st
 
+# =========================
+# Conexão com o banco (Supabase)
+# =========================
+def get_connection():
+    pg = st.secrets["postgres"]
+    conn = psycopg2.connect(
+        host=pg["host"],
+        port=pg["port"],
+        dbname=pg["dbname"],
+        user=pg["user"],
+        password=pg["password"],
+        sslmode=pg.get("sslmode", "require")
+    )
+    return conn
 
-# ===== Conexão com SQLite =====
-conn = psycopg2.connect(
-    host="localhost",   
-    port="5432",
-    database="incidentes_db",  
-    user="admin",
-    password="admin"
-)
-cursor = conn.cursor()
-
-
+# =========================
+# Funções
+# =========================
 def chamar_refresh():
     from novo import refresh_incidentes_db  
     refresh_incidentes_db()
 
-
 def hora_esta_no_turno(turno):
-    """
-    Retorna True se o horário atual está dentro do turno
-    """
     if turno.upper() == "DAY OFF":
         return False
     try:
@@ -39,10 +42,9 @@ def hora_esta_no_turno(turno):
         return False
 
 def pessoa_menos_incidentes(fecha):
-    """
-    Retorna a pessoa ativa naquele momento com menos incidentes até a data especificada
-    """
-  
+    conn = get_connection()
+    cursor = conn.cursor()
+    
     cursor.execute("SELECT person, shift FROM shifts WHERE fecha = %s", (fecha,))
     resultados = cursor.fetchall()
     
@@ -65,57 +67,56 @@ def pessoa_menos_incidentes(fecha):
     return pessoa_escolhida
 
 def convert_person_to_id(person_name):
-    """
-    Converte o nome da pessoa para o ID correspondente
-    """
     person_map = {
-           "SE77162": "Imad",
-           "SG02198": "Yago",
-           "SE12996": "Jeirdel",
-           "SE64365": "Leopoldo",
-           "E583062": "Lucie",
-           "SE10257": "Gustavo",
-           "SF62252": "Manuel",
-           "SF62255": "Agustin",
-           "SE10259": "Laura",
-           "E546999": "Catia",
-           "E405028": "Sandra",
-           "SG18763": "Andrea",
-           "SG18764": "Eleonora",
-           "SE09787": "Lucas",
-           "SD70551": "Maria C",
-           "SE06493": "Mario",
-           "SD70553": "Denis",
-           "E506886": "Albert"
+        "SE77162": "Imad",
+        "SG02198": "Yago",
+        "SE12996": "Jeirdel",
+        "SE64365": "Leopoldo",
+        "E583062": "Lucie",
+        "SE10257": "Gustavo",
+        "SF62252": "Manuel",
+        "SF62255": "Agustin",
+        "SE10259": "Laura",
+        "E546999": "Catia",
+        "E405028": "Sandra",
+        "SG18763": "Andrea",
+        "SG18764": "Eleonora",
+        "SE09787": "Lucas",
+        "SD70551": "Maria C",
+        "SE06493": "Mario",
+        "SD70553": "Denis",
+        "E506886": "Albert"
     }
     inverted_map = {v: k for k, v in person_map.items()}
     return inverted_map.get(person_name, None)
 
 def assigned_person_name(assigned_person_id):
     person_map = {
-    "SE77162": "IMAD",
-    "SG02198": "YAGO",
-    "SE12996": "JEIRDEL",
-    "SE64365": "LEOPOLDO",
-    "E583062": "LUCIE",
-    "SE10257": "GUSTAVO",
-    "SF62252": "MANUEL PORTO",
-    "SF62255": "AGUSTIN HUGO",
-    "SE10259": "LAURA",
-    "E546999": "CATIA MARLENE",
-    "E405028": "SANDRA",
-    "SG18763": "ANDREA",
-    "SG18764": "ELEONORA",
-    "SE09787": "LUCAS",
-    "SD70551": "MARIA DEL VALLE",
-    "SE06493": "MARIO",
-    "SD70553": "DENIS",
-    "E506886": "ALBERT PAUL"
-}
+        "SE77162": "IMAD",
+        "SG02198": "YAGO",
+        "SE12996": "JEIRDEL",
+        "SE64365": "LEOPOLDO",
+        "E583062": "LUCIE",
+        "SE10257": "GUSTAVO",
+        "SF62252": "MANUEL PORTO",
+        "SF62255": "AGUSTIN HUGO",
+        "SE10259": "LAURA",
+        "E546999": "CATIA MARLENE",
+        "E405028": "SANDRA",
+        "SG18763": "ANDREA",
+        "SG18764": "ELEONORA",
+        "SE09787": "LUCAS",
+        "SD70551": "MARIA DEL VALLE",
+        "SE06493": "MARIO",
+        "SD70553": "DENIS",
+        "E506886": "ALBERT PAUL"
+    }
     return person_map.get(assigned_person_id, None)
 
-
 def assign_incident_to_persona(incident_number, person_in_note):
+    conn = get_connection()
+    cursor = conn.cursor()
+    
     fecha = datetime.now().date()
 
     cursor.execute("SELECT person, shift FROM shifts WHERE fecha = %s", (fecha,))
@@ -135,7 +136,7 @@ def assign_incident_to_persona(incident_number, person_in_note):
             print("Nenhuma pessoa ativa no momento para assignar o incidente.")
             return None
         
-        cursor.execute("SELECT id FROM shifts WHERE fecha = %s and person = %s", (fecha, pessoa))
+        cursor.execute("SELECT id FROM shifts WHERE fecha=%s and person=%s", (fecha, pessoa))
         shift_ids = cursor.fetchall()
         if not shift_ids:
             print("Nenhum shift encontrado para essa pessoa.")
@@ -148,9 +149,3 @@ def assign_incident_to_persona(incident_number, person_in_note):
         new_id = cursor.fetchone()[0]
         conn.commit()
         return convert_person_to_id(pessoa)
-
-
-#if __name__ == "__main__":
-#    print("Testando assign_incident_to_persona diretamente...")
-#    resultado = assign_incident_to_persona("INC123456", "E506886")
-#    print(resultado)
